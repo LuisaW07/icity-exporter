@@ -10,7 +10,8 @@ iCity's web interface limits you to viewing ~300 recent entries (10 pages × 30 
 
 - 📖 Export **all** diary entries (not just the most recent 300)
 - 📄 Output as JSON (structured) or plain text (human-readable)
-- ❤️ Preserves likes, comments count, and image indicators
+- 📷 Extracts full image URLs (high-res 1280×1280) for every entry
+- ❤️ Preserves likes, comments count, source, and permalinks
 - 👤 Export your own diary or any user's public diary
 - 🔒 Credentials are only used for login, never stored
 
@@ -70,10 +71,15 @@ You can use this script directly in a Claude conversation (Claude Code, Cowork, 
   {
     "date": "11月10日 2026",
     "time": "23:36",
+    "datetime": "2026-11-10T23:36:00+08:00",
     "content": "今天天气真好！",
+    "images": [
+      "https://icity-static.icitycdn.com/images/uploads/photos/.../1280x1280"
+    ],
     "likes": 1,
     "comments": 0,
-    "has_image": true
+    "source": "iCity for iOS",
+    "permalink": "/a/12345"
   }
 ]
 ```
@@ -87,6 +93,8 @@ You can use this script directly in a Claude conversation (Claude Code, Cowork, 
 
 [23:36] ♡1
 今天天气真好！
+  📷 1 image(s):
+    https://icity-static.icitycdn.com/images/uploads/photos/.../1280x1280
 ```
 
 ## How It Works
@@ -98,7 +106,7 @@ The tool uses Playwright to handle login (which requires cookies/CSRF tokens) an
 ## Limitations
 
 - Requires a valid icity.ly account to authenticate
-- Images/photos are not downloaded (only their presence is noted)
+- Images/photos are not downloaded (URLs are extracted at 1280×1280 resolution)
 - Rate limiting: the tool adds small delays between pages to be respectful
 - The `per_page` parameter is undocumented and could stop working if iCity changes their backend
 
