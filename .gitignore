@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.json
+*.txt
+!requirements.txt
+!README.md
+.env
