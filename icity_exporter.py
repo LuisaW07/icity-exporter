@@ -3,7 +3,7 @@
 icity-exporter: Export all diary entries from icity.ly
 
 Logs into icity.ly via Playwright, paginates through all diary entries,
-and exports them as structured JSON and/or plain text.
+and exports them as structured JSON and/or plain text — including image URLs.
 
 Usage:
     python icity_exporter.py --email YOUR_EMAIL --password YOUR_PASSWORD [--output diary.json] [--format json|txt|both]
@@ -55,7 +55,6 @@ def login(page, email: str, password: str) -> bool:
 
 def get_username(page) -> str | None:
     """Extract the logged-in user's username from the page."""
-    # Try to find username from profile link
     username = page.evaluate('''() => {
         const link = document.querySelector('a[href*="/u/"]');
         if (link) {
@@ -71,12 +70,13 @@ def fetch_all_entries(page, username: str, per_page: int = 200) -> list[dict]:
     """
     Fetch all diary entries by paginating through /u/{username}/posts.
 
+    Uses HTML parsing to extract structured data including image URLs.
     The icity.ly web interface supports an undocumented `per_page` parameter
-    that allows fetching up to 200 entries per page, and pagination beyond
-    the default 10-page limit.
+    that allows fetching up to 200 entries per page, bypassing the default
+    10-page limit.
     """
     all_entries = []
-    seen_last_text = None
+    seen_last_html = None
 
     for pg in range(1, 100):  # Safety limit
         url = f"https://icity.ly/u/{username}/posts?page={pg}&per_page={per_page}"
@@ -92,113 +92,104 @@ def fetch_all_entries(page, username: str, per_page: int = 200) -> list[dict]:
             print(f"error: {e}")
             break
 
-        body = page.evaluate("() => document.body.innerText")
+        # Extract entries from HTML using JavaScript for reliable parsing
+        result = page.evaluate("""() => {
+            const entries = [];
+            let currentDate = '';
 
-        # Strip header
-        if f"{username}日记" in body:
-            body = body.split(f"{username}日记\n", 1)[-1]
-        # Strip footer
-        if "© 2015" in body:
-            body = body[: body.index("© 2015")]
+            const items = document.querySelectorAll('.posts-list > li');
+            for (const li of items) {
+                // Date separator
+                if (li.classList.contains('day-cut')) {
+                    currentDate = li.textContent.replace(/[^\\d月日 ]/g, '').trim();
+                    continue;
+                }
 
-        body = body.strip()
+                // Diary entry
+                if (li.classList.contains('diary')) {
+                    const entry = { date: currentDate };
 
-        if not body or len(body) < 30:
-            print("empty page, done.")
+                    // Text content
+                    const comment = li.querySelector('.comment:not([data-expand-to])');
+                    entry.content = comment ? comment.textContent.trim() : '';
+
+                    // Title (some entries have an h4 title)
+                    const h4 = li.querySelector('h4 a');
+                    if (h4) {
+                        const title = h4.textContent.trim();
+                        if (title && title !== entry.content) {
+                            entry.content = title + '\\n' + entry.content;
+                        }
+                    }
+
+                    // Time
+                    const timeEl = li.querySelector('time');
+                    entry.time = timeEl ? timeEl.textContent.trim() : '';
+                    entry.datetime = timeEl ? timeEl.getAttribute('datetime') : '';
+
+                    // Images
+                    const imgs = li.querySelectorAll('.photos img');
+                    entry.images = [];
+                    for (const img of imgs) {
+                        let src = img.getAttribute('src') || '';
+                        // Get higher resolution: replace /640x640 with /1280x1280
+                        src = src.replace(/\\/\\d+x\\d+$/, '/1280x1280');
+                        if (src) entry.images.push(src);
+                    }
+
+                    // Likes (check for .liked class or count)
+                    const likeEl = li.querySelector('.like .fic-ic-like');
+                    const likeCount = li.querySelector('.like span');
+                    entry.likes = likeCount ? parseInt(likeCount.textContent) || 0 : 0;
+                    // If there's a .liked class but no count span, it has at least 1
+                    if (entry.likes === 0 && li.querySelector('.like.liked')) {
+                        entry.likes = 1;
+                    }
+
+                    // Comments count
+                    const commentCount = li.querySelector('a.comment[data-expand-to] span');
+                    entry.comments = commentCount ? parseInt(commentCount.textContent) || 0 : 0;
+
+                    // Source (iCity app, web, etc)
+                    const via = li.querySelector('.via');
+                    entry.source = via ? via.textContent.trim() : '';
+
+                    // Permalink
+                    const permalink = li.querySelector('.timeago');
+                    entry.permalink = permalink ? permalink.getAttribute('href') : '';
+
+                    if (entry.content || entry.images.length > 0) {
+                        entries.push(entry);
+                    }
+                }
+            }
+            return entries;
+        }""")
+
+        if not result or len(result) == 0:
+            # Fallback: check if page is truly empty or just different structure
+            body = page.evaluate("() => document.body.innerText")
+            if not body or len(body.strip()) < 30:
+                print("empty page, done.")
+                break
+            print("no entries parsed (page structure may have changed), done.")
             break
 
-        # Detect duplicate pages (icity returns last page repeatedly)
-        last_50 = body[-50:]
-        if last_50 == seen_last_text:
+        # Detect duplicate pages (icity returns last page content for out-of-range pages)
+        last_sig = result[-1].get("content", "")[-50:] if result else ""
+        if last_sig == seen_last_html:
             print("duplicate of previous page, done.")
             break
-        seen_last_text = last_50
+        seen_last_html = last_sig
 
-        # Parse entries from this page
-        entries = parse_entries(body)
-        all_entries.extend(entries)
-        print(f"{len(entries)} entries")
+        all_entries.extend(result)
+        img_count = sum(1 for e in result if e.get("images"))
+        print(f"{len(result)} entries ({img_count} with images)")
 
-        if len(entries) == 0:
+        if len(result) == 0:
             break
 
     return all_entries
-
-
-def parse_entries(text: str) -> list[dict]:
-    """
-    Parse diary entries from page text.
-
-    Entry format:
-        {date header}        (e.g., "11月10日 2026")
-        {content lines}
-        {time} {likes} {comments}  (e.g., "23:36 1  iCity")
-    """
-    entries = []
-    current_date = ""
-    buffer_lines = []
-
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        # Date header: "11月10日 2026" or "11月 9日 2026"
-        date_match = re.match(r"^(\d{1,2}月\s?\d{1,2}日\s+\d{4})$", stripped)
-        if date_match:
-            current_date = date_match.group(1)
-            continue
-
-        # Time marker at end of entry: "23:36" or "23:36 1" or "23:36 1  iCity"
-        time_match = re.match(r"^(\d{1,2}:\d{2})\s*([\d\s]*)\s*(iCity)?$", stripped)
-        if time_match:
-            if buffer_lines:
-                content = "\n".join(buffer_lines).strip()
-                if content:
-                    # Parse likes/comments from the time line
-                    meta = time_match.group(2).strip()
-                    likes = 0
-                    comments = 0
-                    if meta:
-                        nums = meta.split()
-                        if len(nums) >= 1:
-                            try:
-                                likes = int(nums[0])
-                            except ValueError:
-                                pass
-                        if len(nums) >= 2:
-                            try:
-                                comments = int(nums[1])
-                            except ValueError:
-                                pass
-
-                    entries.append({
-                        "date": current_date,
-                        "time": time_match.group(1),
-                        "content": content,
-                        "likes": likes,
-                        "comments": comments,
-                        "has_image": "iCity" in stripped if time_match.group(3) else False,
-                    })
-            buffer_lines = []
-            continue
-
-        buffer_lines.append(stripped)
-
-    # Handle last entry if no trailing time marker
-    if buffer_lines:
-        content = "\n".join(buffer_lines).strip()
-        if content:
-            entries.append({
-                "date": current_date,
-                "time": "",
-                "content": content,
-                "likes": 0,
-                "comments": 0,
-                "has_image": False,
-            })
-
-    return entries
 
 
 def export_json(entries: list[dict], path: Path):
@@ -209,7 +200,7 @@ def export_json(entries: list[dict], path: Path):
 
 
 def export_txt(entries: list[dict], path: Path):
-    """Export entries as plain text."""
+    """Export entries as plain text with image URLs."""
     with open(path, "w", encoding="utf-8") as f:
         current_date = ""
         for entry in entries:
@@ -219,12 +210,17 @@ def export_txt(entries: list[dict], path: Path):
                 f.write(f"  {current_date}\n")
                 f.write(f"{'=' * 40}\n\n")
             f.write(f"[{entry['time']}]")
-            if entry["likes"]:
+            if entry.get("likes"):
                 f.write(f" ♡{entry['likes']}")
-            if entry["comments"]:
+            if entry.get("comments"):
                 f.write(f" 💬{entry['comments']}")
             f.write("\n")
-            f.write(f"{entry['content']}\n\n")
+            f.write(f"{entry['content']}\n")
+            if entry.get("images"):
+                f.write(f"  📷 {len(entry['images'])} image(s):\n")
+                for img_url in entry["images"]:
+                    f.write(f"    {img_url}\n")
+            f.write("\n")
     print(f"Exported {len(entries)} entries to {path}")
 
 
@@ -294,7 +290,8 @@ Examples:
         sys.exit(0)
 
     print(f"\nTotal entries: {len(entries)}")
-    print(f"Date range: {entries[0]['date']} → {entries[-1]['date']}")
+    if entries:
+        print(f"Date range: {entries[0]['date']} → {entries[-1]['date']}")
 
     # Export
     output = Path(args.output)
@@ -305,12 +302,15 @@ Examples:
 
     # Stats
     total_chars = sum(len(e["content"]) for e in entries)
-    total_likes = sum(e["likes"] for e in entries)
+    total_likes = sum(e.get("likes", 0) for e in entries)
+    total_images = sum(len(e.get("images", [])) for e in entries)
+    entries_with_images = sum(1 for e in entries if e.get("images"))
     print(f"\nStats:")
     print(f"  Total entries:    {len(entries)}")
     print(f"  Total characters: {total_chars:,}")
     print(f"  Total likes:      {total_likes}")
-    print(f"  Entries w/ images: {sum(1 for e in entries if e['has_image'])}")
+    print(f"  Entries w/ images: {entries_with_images}")
+    print(f"  Total images:     {total_images}")
 
 
 if __name__ == "__main__":
