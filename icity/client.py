@@ -360,10 +360,11 @@ class ICityClient:
 
         post_data = {
             "authenticity_token": self._csrf_token,
-            "activity[content]": content,
+            "activity[data][comment]": content,
+            "activity[data][user_privacy]": str(privacy),
         }
         if title:
-            post_data["activity[title]"] = title
+            post_data["activity[data][title]"] = title
 
         resp = self.session.post(
             f"{BASE_URL}/activities",
@@ -410,7 +411,7 @@ class ICityClient:
 
         post_data = {
             "authenticity_token": self._csrf_token,
-            "activity[content]": content,
+            "activity[data][comment]": content,
         }
 
         resp = self.session.post(
