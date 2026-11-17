@@ -1,120 +1,196 @@
 # icity-exporter
 
-Export all your diary entries from [icity.ly](https://icity.ly) as JSON or plain text.
+Python client for [icity.ly](https://icity.ly) — read and write diary entries without a browser.
 
-## Why?
-
-iCity's web interface limits you to viewing ~300 recent entries (10 pages × 30 entries). This tool bypasses that limitation by using an undocumented `per_page` parameter, letting you export your **entire** diary history — even if you have thousands of entries.
+Designed so any AI assistant (Claude, ChatGPT, etc.) can interact with icity diaries using just `pip install` and a few lines of Python. No Playwright, no browser, no headless Chrome.
 
 ## Features
 
-- 📖 Export **all** diary entries (not just the most recent 300)
-- 📄 Output as JSON (structured) or plain text (human-readable)
-- 📷 Extracts full image URLs (high-res 1280×1280) for every entry
-- ❤️ Preserves likes, comments count, source, and permalinks
-- 👤 Export your own diary or any user's public diary
-- 🔒 Credentials are only used for login, never stored
+- 📖 **Read** diary entries, images, comments, and profile info
+- ✍️ **Write** new diary entries
+- 💬 **Comment** on entries
+- ❤️ **Like** entries
+- 📤 **Export** full diary as JSON or plain text
+- 🤖 **AI-friendly** — lightweight enough for code interpreters
 
-## Requirements
+## Quick Start
 
-- Python 3.10+
-- [Playwright](https://playwright.dev/python/)
+```bash
+pip install requests beautifulsoup4
+```
+
+```python
+from icity import ICityClient
+
+# Anonymous: read recent public entries (~3 most recent)
+client = ICityClient()
+profile = client.get_profile("some_user")
+entries = client.get_entries("some_user")
+
+# Authenticated: full read + write access
+client = ICityClient(email="you@example.com", password="yourpassword")
+all_entries = client.get_all_entries("some_user")  # all 1000+ entries
+client.post_entry("Hello from Python! 🐍")
+client.like_entry("abc123")
+client.post_comment("abc123", "Nice!")
+```
 
 ## Installation
 
 ```bash
-# Clone the repo
 git clone https://github.com/LuisaW07/icity-exporter.git
 cd icity-exporter
+pip install -r requirements.txt
+```
 
-# Install dependencies
-pip install playwright
-playwright install chromium
+Or install as a package:
+
+```bash
+pip install -e .
 ```
 
 ## Usage
 
-### Basic export (JSON)
+### For AI Assistants
+
+Give your AI assistant this repo and your icity credentials. It can then:
+
+```python
+from icity import ICityClient
+
+# Read your diary
+client = ICityClient(email="...", password="...")
+entries = client.get_all_entries("your_username")
+
+for entry in entries:
+    print(entry.date, entry.time)
+    print(entry.content)
+    print(entry.images)  # list of image URLs (1280x1280)
+
+# Write on your behalf
+token = client.post_entry("AI wrote this for me ✨")
+comment_id = client.post_comment("entry_id", "Great post!")
+client.like_entry("entry_id")
+client.unlike_entry("entry_id")
+```
+
+### Reading Entries
+
+```python
+client = ICityClient(email="...", password="...")
+
+# Get user profile
+profile = client.get_profile("username")
+print(profile.nickname, profile.diary_count)
+
+# Get one page of entries
+entries = client.get_entries("username", page=1, per_page=200)
+
+# Get ALL entries (auto-pagination)
+all_entries = client.get_all_entries("username")
+
+# Get comments on an entry
+comments = client.get_entry_comments("entry_id")
+```
+
+### Writing
+
+```python
+client = ICityClient(email="...", password="...")
+
+# Post a diary entry (returns entry token string)
+token = client.post_entry("Today was a good day.")
+token = client.post_entry("Private thoughts.", privacy=0)  # private entry
+token = client.post_entry("Titled entry", title="My Title")
+
+# Like / unlike an entry
+client.like_entry("abc123")    # returns True
+client.unlike_entry("abc123")  # returns True
+
+# Comment on an entry (returns comment token string)
+comment_token = client.post_comment("abc123", "Love this!")
+```
+
+### Export
+
+```python
+client = ICityClient(email="...", password="...")
+
+# Export as JSON
+client.export_json("username", "diary.json")
+
+# Export as plain text
+client.export_txt("username", "diary.txt")
+```
+
+### Legacy CLI (v1)
+
+The original Playwright-based export script is still available:
 
 ```bash
-python icity_exporter.py --email your@email.com --password yourpassword
+python icity_exporter.py --email you@example.com --password pass --format both
 ```
 
-### Export as plain text
+## Data Models
 
-```bash
-python icity_exporter.py --email your@email.com --password yourpassword --format txt
-```
+### DiaryEntry
 
-### Export both formats
+| Field | Type | Description |
+|-------|------|-------------|
+| `content` | str | Entry text |
+| `entry_id` | str | Short ID (e.g. `'aihy1u3'`) |
+| `date` | str | Date string (e.g. `'11月17日 2026'`) |
+| `time` | str | Time string (e.g. `'00:25'`) |
+| `datetime_iso` | str | ISO 8601 datetime |
+| `images` | list[str] | Image URLs (1280×1280) |
+| `likes` | int | Like count |
+| `comments_count` | int | Comment count |
+| `source` | str | Post source (e.g. `'iCity'`) |
+| `permalink` | str | Full URL |
 
-```bash
-python icity_exporter.py --email your@email.com --password yourpassword --format both --output my_diary
-```
+### UserProfile
 
-### Export another user's diary
+| Field | Type | Description |
+|-------|------|-------------|
+| `username` | str | Username |
+| `nickname` | str | Display name |
+| `bio` | str | Bio text |
+| `avatar_url` | str | Avatar image URL |
+| `diary_count` | int | Number of diary entries |
+| `photo_count` | int | Number of photos |
+| `follower_count` | int | Followers |
+| `following_count` | int | Following |
 
-```bash
-python icity_exporter.py --email your@email.com --password yourpassword --username their_username
-```
+## Anonymous vs Authenticated
 
-### Using with Claude
-
-You can use this script directly in a Claude conversation (Claude Code, Cowork, or chat). Just ask Claude to run it and it will execute in the cloud — no local setup needed.
-
-## Output Format
-
-### JSON
-
-```json
-[
-  {
-    "date": "11月10日 2026",
-    "time": "23:36",
-    "datetime": "2026-11-10T23:36:00+08:00",
-    "content": "今天天气真好！",
-    "images": [
-      "https://icity-static.icitycdn.com/images/uploads/photos/.../1280x1280"
-    ],
-    "likes": 1,
-    "comments": 0,
-    "source": "iCity for iOS",
-    "permalink": "/a/12345"
-  }
-]
-```
-
-### Plain Text
-
-```
-========================================
-  11月10日 2026
-========================================
-
-[23:36] ♡1
-今天天气真好！
-  📷 1 image(s):
-    https://icity-static.icitycdn.com/images/uploads/photos/.../1280x1280
-```
+| Feature | Anonymous | Authenticated |
+|---------|-----------|---------------|
+| Read profile | ✅ | ✅ |
+| Read recent entries | ✅ (~3 entries) | ✅ (all entries) |
+| Pagination | ❌ | ✅ (per_page up to 200) |
+| Read comments | ❌ | ✅ |
+| Post diary | ❌ | ✅ |
+| Like entries | ❌ | ✅ |
+| Unlike entries | ❌ | ✅ |
+| Post comments | ❌ | ✅ |
+| Export | ❌ | ✅ |
 
 ## How It Works
 
-iCity's web frontend paginates diary entries at 30 per page, with a hard cap at page 10 (300 entries). However, the server accepts a `per_page` query parameter that isn't exposed in the UI. By setting `per_page=200`, we can fetch up to 200 entries per page with no page limit, allowing complete diary export.
+icity.ly has no public API. This library uses `requests` + `BeautifulSoup` to:
 
-The tool uses Playwright to handle login (which requires cookies/CSRF tokens) and then paginates through all pages until it detects an empty or duplicate page.
+1. **Login**: Extract CSRF token from `/welcome`, POST credentials
+2. **Read**: Parse the HTML `.posts-list` structure from profile/posts pages
+3. **Write**: POST to icity's activity system (`/activities` with `act_id`) with CSRF tokens
+4. **Paginate**: Use the undocumented `per_page` parameter (up to 200)
 
 ## Limitations
 
-- Requires a valid icity.ly account to authenticate
-- Images/photos are not downloaded (URLs are extracted at 1280×1280 resolution)
-- Rate limiting: the tool adds small delays between pages to be respectful
-- The `per_page` parameter is undocumented and could stop working if iCity changes their backend
+- Anonymous access is limited to ~3 recent entries (icity server restriction)
+- Image upload for diary entries is not yet supported (text-only posts)
+- The `per_page` parameter is undocumented and could change
+- No rate limiting built in — be respectful with large exports
 
 ## License
 
 MIT
-
-## Acknowledgments
-
-- Built with [Playwright](https://playwright.dev/python/) for browser automation
-- Inspired by the need to actually read your own diary history 🙃
